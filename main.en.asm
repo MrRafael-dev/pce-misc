@@ -515,9 +515,6 @@ SUBROUTINE_RESET:
 	st.data #$3000
 	st0 #VDC_VRAM_READ_WRITE
 	
-	; Loop usado para carregar um sprite na VRAM.
-	; São processados 2 bytes de cada vez.
-	
 	; Loop used to load a sprite into VRAM.
 	; It will process 2 bytes at a time.
 	@loadSpriteGraphics:
