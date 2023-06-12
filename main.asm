@@ -39,7 +39,10 @@
 .ENDRO
 
 ; Variáveis definidas na RAM.
-.RAMSECTION "variables" BANK 0 SLOT "RAM"
+.RAMSECTION "variables" BANK 1 SLOT "RAM"
+	Variable.Gamepad: word
+	Variable.PlayerX: db
+	Variable.PlayerY: db
 .ENDS
 
 ; Preencher espaços vazios com $FF.
@@ -65,6 +68,9 @@
 .DEFINE TAM6 64
 .DEFINE TAM7 128
 
+.DEFINE IO_TIMER_COUNTER $0C00
+.DEFINE IO_TIMER_CONTROL $0C01
+
 .DEFINE ST0_ADDRESS 0 ; Escrever um valor neste endereço equivale ao `st0`. 
 .DEFINE ST1_ADDRESS 2 ; Escrever um valor neste endereço equivale ao `st1`. 
 .DEFINE ST2_ADDRESS 3 ; Escrever um valor neste endereço equivale ao `st2`. 
@@ -78,18 +84,34 @@
 .DEFINE IO_PALETTE_NEW_LO   $0404 ; Define uma nova cor na paleta: [__] [VV]
 .DEFINE IO_PALETTE_NEW_HI   $0405 ; Define uma nova cor na paleta: [VV] [__]
 
-.DEFINE IO_IRQ_JOYPAD  $1000
+.DEFINE IO_VDC_PORT    $0000 ; Porta de vídeo (VDC).
+.DEFINE IO_IRQ_JOYPAD  $1000 ; Porta dos controles.
+.DEFINE IO_IRQ_PORT    $1400 ; Porta das interrupts (IRQs).
 .DEFINE IO_IRQ_DISABLE $1402 ; Desativa interrupts (IRQs).
 .DEFINE IO_IRQ_REQUEST $1403 ; Requisita interrupt (IRQ).
 
 .DEFINE VDC_VRAM_WRITE_ADDRESS  $00 ; Seleciona um offset da VDC para leitura.
 .DEFINE VDC_VRAM_READ_ADDRESS   $01 ; Seleciona um offset da VDC para escrita.
 .DEFINE VDC_VRAM_READ_WRITE     $02 ; Expõe o offset da VDC para ler/escrever.
-.DEFINE VDC_CONTROL             $05 ; Controla a VDC.
-.DEFINE VDC_BACKGROUND_SCROLL_X $07 ; Controla a posição X do background.
-.DEFINE VDC_BACKGROUND_SCROLL_Y $08 ; Controla a posição Y do background.
-.DEFINE VDC_MEMORY_ACCESS_WIDTH $09 ; Controle do clock de pixels da VDC.
-.DEFINE VDC_VRAM_TO_SATB        $13 ; Transfere dados da VRAM para a SATB.
+
+.DEFINE VDC_CONTROL               $05 ; [ CR] Controla a VDC.
+.DEFINE VDC_SCANLINE_DETECTION    $06 ; [RCR] 
+.DEFINE VDC_BACKGROUND_SCROLL_X   $07 ; [BXR] Controla a posição X do background.
+.DEFINE VDC_BACKGROUND_SCROLL_Y   $08 ; [BYR] Controla a posição Y do background.
+.DEFINE VDC_MEMORY_ACCESS_WIDTH   $09 ; [MWR] Controle do clock de pixels da VDC.
+.DEFINE VDC_HSYNC                 $0A ; [HSR]
+.DEFINE VDC_HDISPLAY              $0B ; [HDR] Controle do tamanho do display horizontal.
+.DEFINE VDC_VSYNC                 $0C ; [VPR]
+.DEFINE VDC_VDISPLAY              $0D ; [BDW] Controle do tamanho do display vertical.
+.DEFINE VDC_VDISPLAY_END_POSITION $0E ; [BCR]
+
+.DEFINE VDC_BLOCK_TRANSFER_CONTROL             $0F ; [ DCR]
+.DEFINE VDC_BLOCK_TRANSFER_SOURCE_ADDRESS      $10 ; [SOUR]
+.DEFINE VDC_BLOCK_TRANSFER_DESTINATION_ADDRESS $11 ; [DESR]
+.DEFINE VDC_BLOCK_TRANSFER_LENGTH              $12 ; [LENR]
+.DEFINE VDC_VRAM_TO_SATB                       $13 ; [SATB] Transfere dados da VRAM para a SATB.
+
+.DEFINE VDC_SELECTED_REGISTER $20F7
 
 ; =========================================================================== ;
 ; functions.s
@@ -161,6 +183,19 @@
 ; -
 .FUNCTION spriteFlags(palette, sizeX, sizeY, flipX, flipY, fg) (((flipY # 2) * 32768) | (0 * 8192) | ((sizeY # 4) * 4096) | ((flipX # 2) * 2048) | (0 * 512) | ((sizeX # 2) * 256) | ((fg # 2) * 128) | (0 * 16) | (palette # 16))
 
+; Calcula o endereço de memória de um atributo de sprites dentro
+; da SATB (Sprite Attribute Table) no índice especificado.
+;
+; A SATB (Sprite Attribute Table) possui 64 sprites, todos com tamanho fixo.
+; Desta forma, contanto que o endereço de memória onde ela estiver localizada
+; for o mesmo, é possível utilizar esta função para alterar valores
+; individualmente para cada sprite.
+;
+; -
+;   index: Índice do atributo.
+; -
+.FUNCTION spriteAttributeIndex(index) (SATB_ADDRESS + (8 * (index # 64)))
+
 ; Parâmetros de interrupts (IRQs).
 ; -
 ;   timer: Timer interrupt request.
@@ -185,6 +220,18 @@
 ;   collisionDetection   : Detecção de colisão.
 ; -
 .FUNCTION VDCControlFlags(RWAutoIncrement, enableDRAM, displayTerminalOutput, enableBackground, enableSprites, vsyncSignal, hsyncSignal, vblankSignal, scanlineMatch, spriteOverflow, collisionDetection) ((0 * 16384) | (RWAutoIncrement * 1024) | (enableDRAM * 512) | (displayTerminalOutput * 256) | (enableBackground * 128) | (enableSprites * 64) | (vsyncSignal * 32) | (hsyncSignal * 16) | (vblankSignal * 8) | (scanlineMatch * 4) | (spriteOverflow * 2) | collisionDetection)
+
+; Parâmetros de controle do tamanho do display horizontal.
+;
+; Estes parâmetros não possuem documentação amplamente disponível, mas podem
+; ser melhor compreendidos através deste link:
+; http://archaicpixels.com/HuC6270#.240B_-_HDR_-_Horizontal_Display_Register
+;
+; -
+;   width: Ciclo de tiles exibidos por linha.
+;   end  : Final da exibição de tiles, em ciclos.
+; -
+.FUNCTION horizontalDisplayFlags(width, end) (((end # 128) * 256) | (0 * 128) | (width # 128))
 
 ; =========================================================================== ;
 ; extra_instructions.s
@@ -354,8 +401,7 @@ SUBROUTINE_RESET:
 	
 	; Inicializar pilha (stack pointer) no mapeamento de I/O ($FF).
 	ldx #MPR_IO
-	txs
-	
+
 	; Desativar interrupts (IRQs).
 	; -
 	;   timer = 1
@@ -365,6 +411,50 @@ SUBROUTINE_RESET:
 	lda #IRQFlags(1, 1, 1)
 	sta IO_IRQ_DISABLE
 	
+	st0 #VDC_SCANLINE_DETECTION
+	st.data #$0000
+	
+	st0 #VDC_BACKGROUND_SCROLL_X
+	st.data #$0000
+	
+	st0 #VDC_BACKGROUND_SCROLL_Y
+	st.data #$0000
+	
+	st0 #VDC_MEMORY_ACCESS_WIDTH
+	st.data #$1000
+	
+	st0 #VDC_HSYNC
+	st.data #$0202
+	
+	; Configurar exibição horizontal dos tiles.
+	;
+	; -
+	;   width = 32
+	;   end   = 32
+	; -
+	st0 #VDC_HDISPLAY
+	st.data #horizontalDisplayFlags(32, 32)
+	
+	st0 #VDC_VSYNC
+	st.data #$070D
+	
+	st0 #VDC_VDISPLAY
+	st.data #$DF00
+	
+	st0 #VDC_VDISPLAY_END_POSITION
+	st.data #$0300
+
+; ========
+; @todo
+; ========
+;	st0 #VDC_BLOCK_TRANSFER_CONTROL
+;	st.data #GFX_SPRITE_ATTRIBUTE_TABLE
+;	
+;	; Transferir SATB para a posição especial de memória.
+;	st0 #VDC_VRAM_TO_SATB
+;	st.data #SATB_ADDRESS
+; ========
+
 	; Configurar VDC.
 	; -
 	;   enableBackground = 1
@@ -373,25 +463,39 @@ SUBROUTINE_RESET:
 	st0 #VDC_CONTROL
 	st.data #VDCControlFlags(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0)
 	
-	; Configurar tamanho do background (32 x 32).
-	st0 #VDC_MEMORY_ACCESS_WIDTH
-	st.data #0
-	
-	; Configurar scroll do background.
-	st0 #VDC_BACKGROUND_SCROLL_X
-	st.data #0
-	st0 #VDC_BACKGROUND_SCROLL_Y
-	st.data #0
+	; Inicialização dos controles.
+	;
+	; Os controles são inicializados salvando `1` e `3` na
+	; região de memória `$1000`. Os valores precisam ser escritos com um
+	; período de delay.
+	@initializeJoypad:
+		clx
+		cly
+		
+		; Salvar valores.
+		lda #1
+		sta IO_IRQ_JOYPAD
+		lda #3
+		sta IO_IRQ_JOYPAD
+		
+		; O período de delay deve durar aproximadamente 9 ciclos.
+		; `ina` dura 2 ciclos, e `nop` dura 1 ciclo.
+		ina
+		ina
+		ina
+		ina
+		nop
+	; end
 	
 	; Loop usado para carregar uma paleta na VRAM para os tiles.
 	; São processados 2 bytes de cada vez.
 	;
-	; Note que algumas instruções podem ser rotuladas com "-" e "+" ao lado
+	; Note que algumas instruções podem ser rotuladas com `-` e `+` ao lado
 	; delas. Isto é usado como referência para o assembler, que pode otimizar
 	; o loop com um salto relativo utilizando a instrução `bra`.
 	@loadTilePalette:
-		ldx #0
-		ldy #0
+		clx
+		cly
 		
 		; Selecionar índice da paleta a ser escrita.
 		;
@@ -422,8 +526,8 @@ SUBROUTINE_RESET:
 	; Loop usado para carregar uma paleta na VRAM para os sprites.
 	; São processados 2 bytes de cada vez.
 	@loadSpritePalette:
-		ldx #0
-		ldy #0
+		clx
+		cly
 		
 		; Selecionar índice da paleta a ser escrita.
 		;
@@ -472,8 +576,8 @@ SUBROUTINE_RESET:
 	; Loop usado para carregar um tile na VRAM.
 	; São processados 2 bytes de cada vez.
 	@loadTileGraphics:
-		ldx #0
-		ldy #0
+		clx
+		cly
 		
 		; Mover primeiro byte do tile:
 		;
@@ -517,15 +621,15 @@ SUBROUTINE_RESET:
 	; Loop usado para carregar um sprite na VRAM.
 	; São processados 2 bytes de cada vez.
 	@loadSpriteGraphics:
-		ldx #0
-		ldy #0
+		clx
+		cly
 		
-		; Mover primeiro byte do tile:
+		; Mover primeiro byte do sprite:
 	  - lda GFX_SPRITE.w, y
 		sta ST1_ADDRESS.w
 		iny
 		
-		; Mover segundo byte do tile:
+		; Mover segundo byte do sprite:
 		lda GFX_SPRITE.w, y
 		sta ST2_ADDRESS.w
 		iny
@@ -549,18 +653,38 @@ SUBROUTINE_RESET:
 	; Loop usado para carregar a SATB (Sprite Attribute Table) na VRAM.
 	; São processados 2 bytes de cada vez.
 	@loadSpriteAttributeTable:
-		ldx #0
-		ldy #0
+		clx
+		cly
 		
-		; Mover primeiro byte do tile:
+		; Mover primeiro byte dos atributos:
 	  - lda GFX_SPRITE_ATTRIBUTE_TABLE.w, y
 		sta ST1_ADDRESS.w
 		iny
 		
-		; Mover segundo byte do tile:
+		; Mover segundo byte dos atributos:
 		lda GFX_SPRITE_ATTRIBUTE_TABLE.w, y
 		sta ST2_ADDRESS.w
 		iny
+		
+		; O registrador Y só consegue copiar 256 valores de uma vez antes de
+		; dar overflow.
+		;
+		; Como a A SATB (Sprite Attribute Table) possui 512 bytes no total, 
+		; isso acaba duplicando os primeiros 256 valores ao invés de copiar os
+		; que faltam.
+		;
+		; Alterar o endereço de escrita durante a metade do ciclo de iterações
+		; resolve este problema.
+		;
+		; Note que esta checagem é rotulada com `+`. Este bloco de código é 
+		; muito similar a um `if(x === 128) { ... }`.
+		inx
+		cpx #128
+		bne +
+			st0 #VDC_VRAM_WRITE_ADDRESS
+			st.data #(SATB_ADDRESS + 128)
+			st0 #VDC_VRAM_READ_WRITE
+		; end
 		
 		; Um atributo de sprite possui 8 bytes, 
 		; e este loop processa 2 bytes de cada vez.
@@ -570,7 +694,7 @@ SUBROUTINE_RESET:
 		;
 		; O registrador X é incrementado até 255. Após isso, seu valor dá
 		; overflow e volta a ser 0, totalizando assim 256 iterações.
-		inx
+	  + inx
 		cpx #0
 		bne -
 	; end
@@ -701,16 +825,101 @@ GFX_SPRITE_ATTRIBUTE_TABLE:
 
 ; Subrotina responsável pelo game loop do jogo.
 SUBROUTINE_START:
-  - lda $2000
-	adc #1
-	sta $2000
-	bra -
+	@readGamepad:
+		clx
+		cly
+		
+		; Primeira leitura do gamepad,
+		; período de delay (9 ciclos).
+		;
+		; Left, Down, Right, Up.
+	    lda #1
+		sta IO_IRQ_JOYPAD
+		ina
+		ina
+		ina
+		ina
+		nop
+		lda IO_IRQ_JOYPAD
+		
+		; Salvar primeiro byte do gamepad.
+		ldy #0
+		sta Variable.Gamepad, y
+	
+		; Segunda leitura do gamepad,
+		; período de delay (9 ciclos).
+		;
+		; Run, Select, Button II, Button I.
+		lda #0
+		sta IO_IRQ_JOYPAD
+		ina
+		ina
+		ina
+		ina
+		nop
+		lda IO_IRQ_JOYPAD
+		
+		; Salvar segundo byte do gamepad.
+		ldy #1
+		sta Variable.Gamepad, y
+	; end
+	
+	; Alterar posição X do sprite.
+    lda Variable.PlayerX.w
+	lda #80
+	sta Variable.PlayerX.w
+	
+	; Alterar posição Y do sprite.
+	lda Variable.PlayerY.w
+	ina
+	sta Variable.PlayerY.w
+	
+	; Selecionar região de memória da SATB (Sprite Attribute Table) onde o
+	; primeiro sprite está salvo.
+	st0 #VDC_VRAM_WRITE_ADDRESS
+	st.data #spriteAttributeIndex(0)
+	st0 #VDC_VRAM_READ_WRITE
+	
+	; Salvar posição Y do sprite.
+	lda Variable.PlayerY.w
+	sta ST1_ADDRESS.w
+	stz ST2_ADDRESS.w
+	
+	; Salvar posição X do sprite.
+	lda Variable.PlayerX.w
+	sta ST1_ADDRESS.w
+	stz ST2_ADDRESS.w
+	
+	; Atualizar SATB (Sprite Attribute Table) com os novos valores.
+	st0 #VDC_VRAM_TO_SATB
+	st.data #SATB_ADDRESS
+	
+	jmp SUBROUTINE_START
+; end
+
+; @todo
+SUBROUTINE_VDC_INTERRUPT_HANDLER:
+	rti
+; end
+
+; @todo
+SUBROUTINE_TIMER_INTERRUPT_HANDLER:
+	rti
+; end
+
+; @todo
+SUBROUTINE_INTERRUPT_RETURN:
+	rti
 ; end
 
 ; Os últimos bytes da ROM precisam apontar para a subrotina de incialização.
 ;
 ; O código salta durante a inicialização e um "soft reset".
-.ORG $1FFE
-.word SUBROUTINE_RESET
+.ORG $1FF6
+.word SUBROUTINE_INTERRUPT_RETURN        ; RTI...?
+.word SUBROUTINE_VDC_INTERRUPT_HANDLER   ; VDC interrupt...?
+.word SUBROUTINE_TIMER_INTERRUPT_HANDLER ; Timer interrupt...?
+.word SUBROUTINE_INTERRUPT_RETURN        ; CPU/VCE interrupt...?
+.word SUBROUTINE_RESET                   ; Reset pointer.
 
 ; EOF
