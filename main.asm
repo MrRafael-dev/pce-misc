@@ -40,7 +40,19 @@
 
 ; Variáveis definidas na RAM.
 .RAMSECTION "variables" BANK 1 SLOT "RAM"
-	Variable.Gamepad: word
+	Variable.awaitingNextFrame: db
+	Variable.FramerateCounter: db
+	
+	Variable.P1.Data: word
+	Variable.P1.Up: db
+	Variable.P1.Right: db
+	Variable.P1.Down: db
+	Variable.P1.Left: db
+	Variable.P1.I: db
+	Variable.P1.II: db
+	Variable.P1.Select db
+	Variable.P1.Run: db
+	
 	Variable.PlayerX: db
 	Variable.PlayerY: db
 .ENDS
@@ -401,67 +413,70 @@ SUBROUTINE_RESET:
 	
 	; Inicializar pilha (stack pointer) no mapeamento de I/O ($FF).
 	ldx #MPR_IO
+	txs
+	
+	@startup:
+		; Desativar interrupts (IRQs).
+		; -
+		;   timer = 1
+		;   IRQ1  = 1
+		;   IRQ2  = 1
+		; - 
+		lda #IRQFlags(1, 1, 1)
+		sta IO_IRQ_DISABLE
+	
+		st0 #VDC_SCANLINE_DETECTION
+		st.data #$0000
+	
+		st0 #VDC_BACKGROUND_SCROLL_X
+		st.data #$0000
+	
+		st0 #VDC_BACKGROUND_SCROLL_Y
+		st.data #$0000
+	
+		st0 #VDC_MEMORY_ACCESS_WIDTH
+		st.data #$1000
+	
+		st0 #VDC_HSYNC
+		st.data #$0202
+	
+		; Configurar exibição horizontal dos tiles.
+		;
+		; -
+		;   width = 32
+		;   end   = 32
+		; -
+		st0 #VDC_HDISPLAY
+		st.data #horizontalDisplayFlags(32, 32)
+	
+		st0 #VDC_VSYNC
+		st.data #$070D
+	
+		st0 #VDC_VDISPLAY
+		st.data #$DF00
+	
+		st0 #VDC_VDISPLAY_END_POSITION
+		st.data #$0300
 
-	; Desativar interrupts (IRQs).
-	; -
-	;   timer = 1
-	;   IRQ1  = 1
-	;   IRQ2  = 1
-	; - 
-	lda #IRQFlags(1, 1, 1)
-	sta IO_IRQ_DISABLE
-	
-	st0 #VDC_SCANLINE_DETECTION
-	st.data #$0000
-	
-	st0 #VDC_BACKGROUND_SCROLL_X
-	st.data #$0000
-	
-	st0 #VDC_BACKGROUND_SCROLL_Y
-	st.data #$0000
-	
-	st0 #VDC_MEMORY_ACCESS_WIDTH
-	st.data #$1000
-	
-	st0 #VDC_HSYNC
-	st.data #$0202
-	
-	; Configurar exibição horizontal dos tiles.
-	;
-	; -
-	;   width = 32
-	;   end   = 32
-	; -
-	st0 #VDC_HDISPLAY
-	st.data #horizontalDisplayFlags(32, 32)
-	
-	st0 #VDC_VSYNC
-	st.data #$070D
-	
-	st0 #VDC_VDISPLAY
-	st.data #$DF00
-	
-	st0 #VDC_VDISPLAY_END_POSITION
-	st.data #$0300
+	; ========
+	; @todo
+	; ========
+	;	st0 #VDC_BLOCK_TRANSFER_CONTROL
+	;	st.data #GFX_SPRITE_ATTRIBUTE_TABLE
+	;	
+	;	; Transferir SATB para a posição especial de memória.
+	;	st0 #VDC_VRAM_TO_SATB
+	;	st.data #SATB_ADDRESS
+	; ========
 
-; ========
-; @todo
-; ========
-;	st0 #VDC_BLOCK_TRANSFER_CONTROL
-;	st.data #GFX_SPRITE_ATTRIBUTE_TABLE
-;	
-;	; Transferir SATB para a posição especial de memória.
-;	st0 #VDC_VRAM_TO_SATB
-;	st.data #SATB_ADDRESS
-; ========
-
-	; Configurar VDC.
-	; -
-	;   enableBackground = 1
-	;   enableSprites    = 1
-	; -
-	st0 #VDC_CONTROL
-	st.data #VDCControlFlags(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0)
+		; Configurar VDC.
+		; -
+		;   enableBackground = 1
+		;   enableSprites    = 1
+		; -
+		st0 #VDC_CONTROL
+		st.data #VDCControlFlags(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0)
+	; end
 	
 	; Inicialização dos controles.
 	;
@@ -823,8 +838,19 @@ GFX_SPRITE_ATTRIBUTE_TABLE:
 	.ENDR
 ; end
 
-; Subrotina responsável pelo game loop do jogo.
+; Subrotina de inicialização do jogo.
 SUBROUTINE_START:
+	lda #80
+	sta Variable.PlayerX.w
+	lda #80
+	sta Variable.PlayerY.w
+	
+	jmp SUBROUTINE_UPDATE
+; end
+
+; Subrotina responsável pelo game loop do jogo.
+SUBROUTINE_UPDATE:
+	; Leitura do gamepad (P1).
 	@readGamepad:
 		clx
 		cly
@@ -843,9 +869,8 @@ SUBROUTINE_START:
 		lda IO_IRQ_JOYPAD
 		
 		; Salvar primeiro byte do gamepad.
-		ldy #0
-		sta Variable.Gamepad, y
-	
+		sta Variable.P1.Data.w
+		
 		; Segunda leitura do gamepad,
 		; período de delay (9 ciclos).
 		;
@@ -860,19 +885,173 @@ SUBROUTINE_START:
 		lda IO_IRQ_JOYPAD
 		
 		; Salvar segundo byte do gamepad.
-		ldy #1
-		sta Variable.Gamepad, y
+		sta (Variable.P1.Data.w + 1)
+		
+		; Separar primeiro byte do gamepad em bits.
+		;
+		; Left, Down, Right, Up.
+		@@splitArrowKeysDataIntoBits:
+			clx
+			cly
+			
+			; Loop usado para separar os bits.
+			;
+			; O código e o loop equivalem ao seguinte código:
+			; ```js
+			; function getBit(value, offset) {
+			;   return (value >> offset) & 1;
+			; }
+			; ```
+		  - lda Variable.P1.Data.w
+			; O primeiro valor não precisa do bit-shifting.
+			; Ele pode ser separado imediatamente.
+			cpy #0
+			beq @@@bitwiseAND
+			
+			; Do primeiro valor adiante, o bit-shifting é feito
+			; de forma sequencial.
+			;
+			; O valor atual do iterador será salvo temporariamente em uma
+			; pilha de valores oferecida pela própria CPU. Ele será
+			; restaurado mais adiante...
+			phy
+			
+			; Right-shifting (`>>`).
+			@@@rightShift:
+				sec
+				clc
+				dey
+				ror
+				cpy #0
+				bne @@@rightShift
+			; end
+			
+			; Restaurar o valor original do iterador...
+			ply
+			
+			; Bitwise AND (`&`).
+			@@@bitwiseAND:
+				and #1
+				sta Variable.P1.Up, y
+				iny
+			; end
+			
+			cpy #4
+			bne -
+		; end
+		
+		; Separar primeiro byte do gamepad em bits.
+		;
+		; Run, Select, Button II, Button I.
+		@@splitActionKeysDataIntoBits:
+			clx
+			cly
+			
+			; Loop usado para separar os bits.
+			;
+			; O código e o loop equivalem ao seguinte código:
+			; ```js
+			; function getBit(value, offset) {
+			;   return (value >> offset) & 1;
+			; }
+			; ```
+		  - lda (Variable.P1.Data.w + 1)
+			; O primeiro valor não precisa do bit-shifting.
+			; Ele pode ser separado imediatamente.
+			cpy #0
+			beq @@@bitwiseAND
+			
+			; Do primeiro valor adiante, o bit-shifting é feito
+			; de forma sequencial.
+			;
+			; O valor atual do iterador será salvo temporariamente em uma
+			; pilha de valores oferecida pela própria CPU. Ele será
+			; restaurado mais adiante...
+			phy
+			
+			; Right-shifting (`>>`).
+			@@@rightShift:
+				sec
+				clc
+				dey
+				ror
+				cpy #0
+				bne @@@rightShift
+			; end
+			
+			; Restaurar o valor original do iterador...
+			ply
+			
+			; Bitwise AND (`&`).
+			@@@bitwiseAND:
+				and #1
+				sta Variable.P1.I, y
+				iny
+			; end
+			
+			cpy #4
+			bne -
+		; end
 	; end
 	
-	; Alterar posição X do sprite.
-    lda Variable.PlayerX.w
-	lda #80
-	sta Variable.PlayerX.w
+	@framerateCounter:
+		lda Variable.FramerateCounter.w
+		ina
+		sta Variable.FramerateCounter.w
+		
+		cmp #0
+		bne +
+			lda #0
+			sta Variable.FramerateCounter.w
+			bra @gameLogic
+		; end
+		
+	  + jmp SUBROUTINE_UPDATE
+	; end
 	
-	; Alterar posição Y do sprite.
-	lda Variable.PlayerY.w
-	ina
-	sta Variable.PlayerY.w
+	@gameLogic:
+		@@moveUp:
+			lda Variable.P1.Up.w
+			cmp #0
+			bne @@moveDown
+		
+			lda Variable.PlayerY.w
+			dea
+			sta Variable.PlayerY.w
+		; end
+	
+		@@moveDown:
+			lda Variable.P1.Down.w
+			cmp #0
+			bne @@moveLeft
+		
+			lda Variable.PlayerY.w
+			ina
+			sta Variable.PlayerY.w
+		; end
+	
+		@@moveLeft:
+			lda Variable.P1.Left.w
+			cmp #0
+			bne @@moveRight
+		
+			lda Variable.PlayerX.w
+			dea
+			sta Variable.PlayerX.w
+		; end
+	
+		@@moveRight:
+			lda Variable.P1.Right.w
+			cmp #0
+			bne @@endGameLogic
+		
+			lda Variable.PlayerX.w
+			ina
+			sta Variable.PlayerX.w
+		; end
+	
+		@@endGameLogic:
+	; end
 	
 	; Selecionar região de memória da SATB (Sprite Attribute Table) onde o
 	; primeiro sprite está salvo.
@@ -894,7 +1073,9 @@ SUBROUTINE_START:
 	st0 #VDC_VRAM_TO_SATB
 	st.data #SATB_ADDRESS
 	
-	jmp SUBROUTINE_START
+	@loopback:
+		jmp SUBROUTINE_UPDATE
+	; end
 ; end
 
 ; @todo
