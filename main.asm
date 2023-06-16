@@ -478,30 +478,6 @@ SUBROUTINE_RESET:
 		st.data #VDCControlFlags(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0)
 	; end
 	
-	; Inicialização dos controles.
-	;
-	; Os controles são inicializados salvando `1` e `3` na
-	; região de memória `$1000`. Os valores precisam ser escritos com um
-	; período de delay.
-	@initializeJoypad:
-		clx
-		cly
-		
-		; Salvar valores.
-		lda #1
-		sta IO_IRQ_JOYPAD
-		lda #3
-		sta IO_IRQ_JOYPAD
-		
-		; O período de delay deve durar aproximadamente 9 ciclos.
-		; `ina` dura 2 ciclos, e `nop` dura 1 ciclo.
-		ina
-		ina
-		ina
-		ina
-		nop
-	; end
-	
 	; Loop usado para carregar uma paleta na VRAM para os tiles.
 	; São processados 2 bytes de cada vez.
 	;
@@ -855,16 +831,38 @@ SUBROUTINE_UPDATE:
 		clx
 		cly
 		
+		; Inicialização dos controles.
+		;
+		; Os controles são inicializados salvando `1` e `3` na
+		; região de memória `$1000`. Os valores precisam ser escritos com um
+		; período de delay.
+		@@initializeGamepad:
+			; Salvar valores.
+			lda #1
+			sta IO_IRQ_JOYPAD
+			lda #3
+			sta IO_IRQ_JOYPAD
+		
+			; O período de delay deve durar aproximadamente 9 ciclos.
+			;
+			; pha:   4 ciclos
+			; pla: + 3 ciclos
+			; nop: + 2 ciclos
+			;      ----------
+			;      = 9 ciclos
+			pha
+			pla
+			nop
+		; end
+		
 		; Primeira leitura do gamepad,
 		; período de delay (9 ciclos).
 		;
 		; Left, Down, Right, Up.
 	    lda #1
 		sta IO_IRQ_JOYPAD
-		ina
-		ina
-		ina
-		ina
+		pha
+		pla
 		nop
 		lda IO_IRQ_JOYPAD
 		
@@ -877,10 +875,8 @@ SUBROUTINE_UPDATE:
 		; Run, Select, Button II, Button I.
 		lda #0
 		sta IO_IRQ_JOYPAD
-		ina
-		ina
-		ina
-		ina
+		pha
+		pla
 		nop
 		lda IO_IRQ_JOYPAD
 		
