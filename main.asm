@@ -80,8 +80,8 @@
 .DEFINE TAM6 64
 .DEFINE TAM7 128
 
-.DEFINE IO_TIMER_COUNTER $0C00
-.DEFINE IO_TIMER_CONTROL $0C01
+.DEFINE IO_TIMER_COUNTER $1C00 ; Contador do timer.
+.DEFINE IO_TIMER_CONTROL $1C01 ; Controle do timer.
 
 .DEFINE ST0_ADDRESS 0 ; Escrever um valor neste endereço equivale ao `st0`. 
 .DEFINE ST1_ADDRESS 2 ; Escrever um valor neste endereço equivale ao `st1`. 
@@ -95,6 +95,17 @@
 .DEFINE IO_PALETTE_ENTRY_HI $0403 ; Seleciona um índice de paleta: [VV] [__]
 .DEFINE IO_PALETTE_NEW_LO   $0404 ; Define uma nova cor na paleta: [__] [VV]
 .DEFINE IO_PALETTE_NEW_HI   $0405 ; Define uma nova cor na paleta: [VV] [__]
+
+.DEFINE IO_PSG_CHANNEL_SELECT       $0800 ; Seleciona um canal de áudio.
+.DEFINE IO_PSG_MAIN_AMPLITUDE_LEVEL $0801 ; Volume/amplitude do áudio (speakers esquerdo/direito).
+.DEFINE IO_PSG_FREQUENCY_LO         $0802 ; Frequência do áudio: [__][VV]
+.DEFINE IO_PSG_FREQUENCY_HI         $0803 ; Frequência do áudio: [VV][__]
+.DEFINE IO_PSG_CHANNEL_WRITE        $0804 ; Ativar/escrever dados de áudio.
+.DEFINE IO_PSG_LEFT_RIGHT_VOLUME    $0805 ; Volume do áudio (speakers esquerdo/direito).
+.DEFINE IO_PSG_WAVEFORM_DATA        $0806 ; Dados de onda sonora (deve ser escrito 32 vezes).
+.DEFINE IO_PSG_NOISE_ENABLE         $0807 ; Ativa/desativa frequência de ruído (apenas nos canais 4 e 5).
+.DEFINE IO_PSG_LFO_FREQUENCY        $0808 ; Frequência LFO.
+.DEFINE IO_PSG_LFO_CONTROL          $0809 ; Controle/gatilho do LFO.
 
 .DEFINE IO_VDC_PORT    $0000 ; Porta de vídeo (VDC).
 .DEFINE IO_IRQ_JOYPAD  $1000 ; Porta dos controles.
@@ -122,8 +133,6 @@
 .DEFINE VDC_BLOCK_TRANSFER_DESTINATION_ADDRESS $11 ; [DESR]
 .DEFINE VDC_BLOCK_TRANSFER_LENGTH              $12 ; [LENR]
 .DEFINE VDC_VRAM_TO_SATB                       $13 ; [SATB] Transfere dados da VRAM para a SATB.
-
-.DEFINE VDC_SELECTED_REGISTER $20F7
 
 ; =========================================================================== ;
 ; functions.s
@@ -234,6 +243,7 @@
 .FUNCTION VDCControlFlags(RWAutoIncrement, enableDRAM, displayTerminalOutput, enableBackground, enableSprites, vsyncSignal, hsyncSignal, vblankSignal, scanlineMatch, spriteOverflow, collisionDetection) ((0 * 16384) | (RWAutoIncrement * 1024) | (enableDRAM * 512) | (displayTerminalOutput * 256) | (enableBackground * 128) | (enableSprites * 64) | (vsyncSignal * 32) | (hsyncSignal * 16) | (vblankSignal * 8) | (scanlineMatch * 4) | (spriteOverflow * 2) | collisionDetection)
 
 ; Parâmetros de controle do tamanho do display horizontal.
+; Pode ser usada para o `VDC_HDISPLAY`.
 ;
 ; Estes parâmetros não possuem documentação amplamente disponível, mas podem
 ; ser melhor compreendidos através deste link:
@@ -244,6 +254,52 @@
 ;   end  : Final da exibição de tiles, em ciclos.
 ; -
 .FUNCTION horizontalDisplayFlags(width, end) (((end # 128) * 256) | (0 * 128) | (width # 128))
+
+; Parâmetros de controle do registrador da VSync.
+; Pode ser usada para o `VDC_VSYNC`.
+;
+; Estes parâmetros não possuem documentação amplamente disponível, mas podem
+; ser melhor compreendidos através deste link:
+; http://archaicpixels.com/HuC6270#.240C_-_VSR_-_Vertical_Synchronous_Register
+;
+; -
+;   width: Tamanho do pulso síncrono vertical.
+;   start: Posição inicial do display vertical.
+; -
+.FUNCTION verticalSyncFlags(width, start) (((start # 256) * 256) | (width # 32))
+
+; Calcula o volume dos speakers para o áudio.
+;
+; -
+;   left : Volume do speaker esquerdo.
+;   right: Volume do speaker direito.
+; -
+.FUNCTION PSGVolume(left, right) (((left # 16) * 16) | (right # 16))
+
+; Parâmetros de escrita para o canal de áudio.
+;
+; -
+;   play  : Tocar/escrever dados.
+;   direct: Dados digitais.
+;   volume: Volume do canal.
+; -
+.FUNCTION PSGChannelWriteFlags(play, direct, volume) ((play * 128) | (direct * 64) | (0 * 32) | (volume # 32))
+
+; Parâmetros de ruído de áudio.
+;
+; -
+;   enable   : Ativa/desativa o ruído.
+;   frequency: Frequência do ruído (apenas nos canais 4 e 5).
+; -
+.FUNCTION PSGNoiseEnableFlags(enable, frequency) ((enable * 128) | (0 * 32) | (frequency # 32))
+
+; Parâmetros de controle do LFO.
+;
+; -
+;   trigger: Trigger.
+;   control: Control.
+; -
+.FUNCTION PSGLFOControlFlags() ((trigger * 128) | (0 * 32) | (control # 4))
 
 ; =========================================================================== ;
 ; extra_instructions.s
@@ -448,10 +504,16 @@ SUBROUTINE_RESET:
 		; -
 		st0 #VDC_HDISPLAY
 		st.data #horizontalDisplayFlags(32, 32)
-	
+		
+		; Configurar VSync.
+		;
+		; -
+		;   width = 7
+		;   start = 13
+		; -
 		st0 #VDC_VSYNC
-		st.data #$070D
-	
+		st.data #verticalSyncFlags(7, 13)
+		
 		st0 #VDC_VDISPLAY
 		st.data #$DF00
 	
